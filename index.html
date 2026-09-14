@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Poly Quest: Shape Escape</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+
+        body {
+            background-color: #0b0b12;
+            color: #e2e8f0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 10px;
+            overflow: hidden;
+        }
+
+        #game-wrapper {
+            position: relative;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.8), 0 0 15px rgba(59, 130, 246, 0.3);
+            border: 4px solid #1e293b;
+            border-radius: 12px;
+            overflow: hidden;
+            background-color: #0f172a;
+        }
+
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+        }
+
+        .ui-panel {
+            background: #0f172a;
+            border-top: 2px solid #1e293b;
+            padding: 12px 20px;
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.9rem;
+            color: #94a3b8;
+        }
+
+        .controls-info {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .key-badge {
+            background: #1e293b;
+            color: #f1f5f9;
+            padding: 3px 8px;
+            border-radius: 4px;
+            border: 1px solid #334155;
+            font-weight: bold;
+            font-family: monospace;
+        }
+
+        .btn-action {
+            background: #2563eb;
+            color: white;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn-action:hover {
+            background: #1d4ed8;
+        }
+
+        /* Overlay de Vitória */
+        #victory-screen {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(15, 23, 42, 0.92);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.4s ease;
+            z-index: 10;
+        }
+
+        #victory-screen.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        #victory-screen h1 {
+            color: #4ade80;
+            font-size: 2.8rem;
+            margin-bottom: 10px;
+            text-shadow: 0 0 12px rgba(74, 222, 128, 0.4);
+        }
+
+        #victory-screen p {
+            color: #cbd5e1;
+            margin-bottom: 20px;
+            font-size: 1.1rem;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-wrapper">
+    <canvas id="gameCanvas" width="800" height="480"></canvas>
+    
+    <div id="victory-screen">
+        <h1>NÍVEL CONCLUÍDO!</h1>
+        <p>Todas as formas alcançaram o portal em segurança.</p>
+        <button class="btn-action" onclick="nextLevel()">Próximo Nível</button>
+    </div>
+
+    <div class="ui-panel">
+        <div class="controls-info">
+            <span>Trocar Forma: <span class="key-badge">1</span> <span class="key-badge">2</span> <span class="key-badge">3</span> <span class="key-badge">4</span> ou <span class="key-badge">TAB</span></span>
+            <span>Mover: <span class="key-badge">W</span><span class="key-badge">A</span><span class="key-badge">S</span><span class="key-badge">D</span> / <span class="key-badge">Setas</span></span>
+            <span>Reiniciar: <span class="key-badge">R</span></span>
+        </div>
+        <button class="btn-action" onclick="resetLevel()">Reiniciar (R)</button>
+    </div>
+</div>
+
+<script>
+// --- ÁUDIO SINTETIZADO (Web Audio API) ---
+const AudioContext = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+
+function initAudio() {
+    if (!audioCtx) audioCtx = new AudioContext();
+}
+
+function playSfx(type) {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    const now = audioCtx.currentTime;
+
+    if (type === 'move') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(220, now);
+        osc.frequency.exponentialRampToValueAtTime(110, now + 0.08);
+        gain.gain.setValueAtTime(0.15, now);
+        gain.gain.linearRampToValueAtTime(0, now + 0.08);
+        osc.start(now);
+        osc.stop(now + 0.08);
+    } else if (type === 'select') {
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(440, now);
+        osc.frequency.exponentialRampToValueAtTime(880, now + 0.1);
+        gain.gain.setValueAtTime(0.2, now);
+        gain.gain.linearRampToValueAtTime(0, now + 0.1);
+        osc.start(now);
+        osc.stop(now + 0.1);
+    } else if (type === 'push') {
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(100, now);
+        osc.frequency.exponentialRampToValueAtTime(50, now + 0.12);
+        gain.gain.setValueAtTime(0.2, now);
+        gain.gain.linearRampToValueAtTime(0, now + 0.12);
+        osc.start(now);
+        osc.stop(now + 0.12);
+    } else if (type === 'win') {
+        const notes = [523.25, 659.25, 783.99, 1046.50];
+        notes.forEach((freq, index) => {
+            const o = audioCtx.createOscillator();
+            const g = audioCtx.createGain();
+            o.connect(g);
+            g.connect(audioCtx.destination);
+            o.frequency.value = freq;
+            g.gain.setValueAtTime(0.2, now + index * 0.1);
+            g.gain.linearRampToValueAtTime(0, now + index * 0.1 + 0.25);
+            o.start(now + index * 0.1);
+            o.stop(now + index * 0.1 + 0.25);
+        });
+    }
+}
+
+// --- CONFIGURAÇÕES DE CANVAS E JOGO ---
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+const TILE_SIZE = 40;
+const COLS = 20;
+const ROWS = 10;
+const HUD_HEIGHT = 80;
+
+// Tipos de Tiles
+const TILE = {
+    EMPTY: 0,
+    WALL: 1,
+    PATH: 2,
+    STONE_PATH: 3,
+    TREE: 4,
+    BUSH: 5,
+    SPIKES: 6,
+    GATE: 7
+};
+
+// --- DEFINIÇÃO DOS NÍVEIS ---
+const levels = [
+    {
+        // Réplica Exata Fiel do Mapa da Imagem
+        map: [
+            [1,1,1,1,1,1,1,1,1,7,7,1,1,1,1,1,1,1,1,1],
+            [1,0,0,0,0,0,0,0,1,3,3,1,0,0,0,0,0,0,0,1],
+            [1,4,4,4,4,4,5,0,1,3,3,1,0,5,4,4,0,0,0,1],
+            [1,4,4,4,4,4,5,5,1,3,3,1,5,5,4,4,0,0,0,1],
+            [1,1,1,1,1,1,1,1,1,3,3,1,1,1,1,1,1,1,1,1],
+            [2,2,2,2,2,2,2,2,2,3,3,2,2,2,2,2,2,2,2,2],
+            [1,0,4,4,0,5,5,5,1,3,3,1,0,6,6,6,6,4,0,1],
+            [1,0,4,4,0,5,4,4,1,3,3,1,0,6,6,6,6,4,0,1],
+            [1,0,4,4,5,4,4,4,1,3,3,1,0,6,6,6,6,4,0,1],
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+        ],
+        crates: [
+            {x: 16, y: 1}, {x: 17, y: 1},
+            {x: 16, y: 2}, {x: 17, y: 2},
+            {x: 4, y: 7},  {x: 17, y: 6}
+        ],
+        heroStart: [
+            {x: 8, y: 5},
+            {x: 9, y: 5},
+            {x: 10, y: 5},
+            {x: 11, y: 5}
+        ]
+    },
+    {
+        // Nível 2 - Puzzles de Cooperação e Espinhos
+        map: [
+            [1,1,1,1,1,1,1,1,1,7,7,1,1,1,1,1,1,1,1,1],
+            [1,0,0,0,1,0,0,0,1,3,3,1,0,0,0,6,6,0,0,1],
+            [1,0,4,0,1,0,4,0,1,3,3,1,0,4,0,6,6,0,0,1],
+            [1,0,4,0,0,0,4,0,1,3,3,1,0,4,0,0,0,0,0,1],
+            [1,1,1,1,1,1,1,0,1,3,3,1,0,1,1,1,1,1,1,1],
+            [2,2,2,2,2,2,2,2,2,3,3,2,2,2,2,2,2,2,2,2],
+            [1,6,6,6,1,0,0,0,1,3,3,1,0,0,0,0,4,4,0,1],
+            [1,6,6,6,1,0,5,0,1,3,3,1,0,5,5,0,4,4,0,1],
+            [1,0,0,0,0,0,5,0,1,3,3,1,0,5,5,0,0,0,0,1],
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+        ],
+        crates: [
+            {x: 3, y: 1}, {x: 7, y: 3}, {x: 12, y: 7}
+        ],
+        heroStart: [
+            {x: 1, y: 5},
+            {x: 2, y: 5},
+            {x: 3, y: 5},
+            {x: 4, y: 5}
+        ]
+    }
+];
+
+let currentLevelIndex = 0;
+let currentMap = [];
+let crates = [];
+
+// --- DADOS DAS FORMAS (PERSONAGENS) ---
+const heroes = [
+    { id: 1, name: 'Quadrado', type: 'square', color: '#22c55e', border: '#15803d', x: 0, y: 0, active: true, escaped: false },
+    { id: 2, name: 'Triângulo', type: 'triangle', color: '#eab308', border: '#a16207', x: 0, y: 0, active: false, escaped: false },
+    { id: 3, name: 'Losango', type: 'diamond', color: '#ef4444', border: '#b91c1c', x: 0, y: 0, active: false, escaped: false },
+    { id: 4, name: 'Círculo', type: 'circle', color: '#3b82f6', border: '#1d4ed8', x: 0, y: 0, active: false, escaped: false }
+];
+
+let activeHeroIndex = 0;
+
+function loadLevel(index) {
+    const level = levels[index];
+    currentMap = JSON.parse(JSON.stringify(level.map));
+    crates = JSON.parse(JSON.stringify(level.crates));
+
+    level.heroStart.forEach((pos, i) => {
+        heroes[i].x = pos.x;
+        heroes[i].y = pos.y;
+        heroes[i].escaped = false;
+    });
+
+    activeHeroIndex = 0;
+    heroes.forEach((h, i) => h.active = (i === 0));
+    document.getElementById('victory-screen').classList.remove('active');
+}
+
+function resetLevel() {
+    loadLevel(currentLevelIndex);
+}
+
+function nextLevel() {
+    currentLevelIndex = (currentLevelIndex + 1) % levels.length;
+    loadLevel(currentLevelIndex);
+}
+
+// --- CONTROLES E INPUTS ---
+window.addEventListener('keydown', (e) => {
+    initAudio();
+
+    if (e.key === '1') setHero(0);
+    if (e.key === '2') setHero(1);
+    if (e.key === '3') setHero(2);
+    if (e.key === '4') setHero(3);
+    if (e.key === 'Tab') {
+        e.preventDefault();
+        cycleHero();
+    }
+    if (e.key.toLowerCase() === 'r') {
+        resetLevel();
+        return;
+    }
+
+    let dx = 0, dy = 0;
+    if (e.key === 'ArrowUp' || e.key.toLowerCase() === 'w') dy = -1;
+    if (e.key === 'ArrowDown' || e.key.toLowerCase() === 's') dy = 1;
+    if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') dx = -1;
+    if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') dx = 1;
+
+    if (dx !== 0 || dy !== 0) {
+        moveActiveHero(dx, dy);
+    }
+});
+
+function setHero(index) {
+    if (heroes[index].escaped) return;
+    activeHeroIndex = index;
+    heroes.forEach((h, i) => h.active = (i === index));
+    playSfx('select');
+}
+
+function cycleHero() {
+    let nextIndex = (activeHeroIndex + 1) % 4;
+    let count = 0;
+    while (heroes[nextIndex].escaped && count < 4) {
+        nextIndex = (nextIndex + 1) % 4;
+        count++;
+    }
+    if (!heroes[nextIndex].escaped) {
+        setHero(nextIndex);
+    }
+}
+
+// --- FÍSICA E MOVIMENTAÇÃO ---
+function isSolidTile(x, y, heroType) {
+    if (x < 0 || x >= COLS || y < 0 || y >= ROWS) return true;
+    const tile = currentMap[y][x];
+
+    if (tile === TILE.WALL || tile === TILE.TREE) return true;
+    if (tile === TILE.BUSH && heroType !== 'triangle') return true; // Triângulo pode cortar/atravessar arbustos!
+    if (tile === TILE.SPIKES && heroType === 'diamond') return false; // Losango imune a espinhos!
+
+    return false;
+}
+
+function moveActiveHero(dx, dy) {
+    const hero = heroes[activeHeroIndex];
+    if (hero.escaped) return;
+
+    const targetX = hero.x + dx;
+    const targetY = hero.y + dy;
+
+    // Colisão com outros Heróis
+    const otherHero = heroes.find(h => !h.escaped && h !== hero && h.x === targetX && h.y === targetY);
+    if (otherHero) return;
+
+    // Colisão com Caixas (Sistema Sokoban)
+    const crateIndex = crates.findIndex(c => c.x === targetX && c.y === targetY);
+    if (crateIndex !== -1) {
+        // Quadrado consegue empurrar caixas facilmente
+        const nextCrateX = targetX + dx;
+        const nextCrateY = targetY + dy;
+
+        const crateBlocked = isSolidTile(nextCrateX, nextCrateY, 'crate') ||
+            crates.some(c => c.x === nextCrateX && c.y === nextCrateY) ||
+            heroes.some(h => !h.escaped && h.x === nextCrateX && h.y === nextCrateY);
+
+        if (!crateBlocked) {
+            crates[crateIndex].x = nextCrateX;
+            crates[crateIndex].y = nextCrateY;
+            hero.x = targetX;
+            hero.y = targetY;
+            playSfx('push');
+            checkEscape(hero);
+            return;
+        } else {
+            return;
+        }
+    }
+
+    // Colisão com Terreno
+    if (!isSolidTile(targetX, targetY, hero.type)) {
+        hero.x = targetX;
+        hero.y = targetY;
+        playSfx('move');
+        checkEscape(hero);
+    }
+}
+
+function checkEscape(hero) {
+    const tile = currentMap[hero.y][hero.x];
+    if (tile === TILE.GATE) {
+        hero.escaped = true;
+        hero.active = false;
+        
+        // Ativa o próximo disponível
+        const remaining = heroes.find(h => !h.escaped);
+        if (remaining) {
+            setHero(heroes.indexOf(remaining));
+        } else {
+            // Vitória total!
+            playSfx('win');
+            document.getElementById('victory-screen').classList.add('active');
+        }
+    }
+}
+
+// --- DESENHO EM CANVAS ---
+
+function drawHUD() {
+    // Fundo do Painel Superior HUD
+    ctx.fillStyle = '#090810';
+    ctx.fillRect(0, 0, canvas.width, HUD_HEIGHT);
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(0, 0, canvas.width, HUD_HEIGHT);
+
+    // Quadros das Formas Geometricas
+    heroes.forEach((hero, i) => {
+        const boxX = 20 + i * 75;
+        const boxY = 12;
+        const boxSize = 54;
+
+        // Moldura Ativa
+        if (hero.active) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+            ctx.fillRect(boxX - 4, boxY - 4, boxSize + 8, boxSize + 8);
+            ctx.strokeStyle = hero.color;
+            ctx.lineWidth = 3;
+            ctx.strokeRect(boxX - 4, boxY - 4, boxSize + 8, boxSize + 8);
+        } else {
+            ctx.strokeStyle = '#334155';
+            ctx.lineWidth = 2;
+        }
+
+        ctx.fillStyle = '#111827';
+        ctx.fillRect(boxX, boxY, boxSize, boxSize);
+        ctx.strokeRect(boxX, boxY, boxSize, boxSize);
+
+        // Número de Atalho (1, 2, 3, 4)
+        ctx.fillStyle = hero.escaped ? '#4ade80' : '#94a3b8';
+        ctx.font = 'bold 12px monospace';
+        ctx.fillText(hero.escaped ? 'OK' : hero.id, boxX + 6, boxY + 16);
+
+        // Ícone da Forma com Pés
+        if (!hero.escaped) {
+            drawShapeIcon(hero.type, boxX + boxSize / 2, boxY + boxSize / 2 + 4, 20, hero.color, hero.border);
+        } else {
+            ctx.fillStyle = '#4ade80';
+            ctx.font = '20px sans-serif';
+            ctx.fillText('✓', boxX + boxSize/2 - 6, boxY + boxSize/2 + 8);
+        }
+    });
+
+    // Indicador D-Pad no HUD (Simulando a Imagem de Referência)
+    const padX = 520;
+    const padY = 20;
+
+    ctx.fillStyle = '#64748b';
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'center';
+
+    ctx.fillText('UP', padX + 80, padY + 10);
+    ctx.fillText('+', padX + 80, padY + 22);
+
+    ctx.fillText('LEFT', padX, padY + 40);
+    ctx.fillText('+', padX, padY + 52);
+
+    ctx.fillText('DOWN', padX + 80, padY + 40);
+    ctx.fillText('+', padX + 80, padY + 52);
+
+    ctx.fillText('RIGHT', padX + 160, padY + 40);
+    ctx.fillText('+', padX + 160, padY + 52);
+
+    ctx.textAlign = 'left';
+}
+
+function drawMap() {
+    for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+            const x = c * TILE_SIZE;
+            const y = r * TILE_SIZE + HUD_HEIGHT;
+            const tile = currentMap[r][c];
+
+            // Fundo Padrão Solo
+            ctx.fillStyle = '#151522';
+            ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+
+            if (tile === TILE.WALL) {
+                // Parede de Tijolos de Pedra
+                ctx.fillStyle = '#2d3248';
+                ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+                ctx.strokeStyle = '#1a1c29';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x, y, TILE_SIZE, TILE_SIZE);
+                // Linhas de tijolo
+                ctx.beginPath();
+                ctx.moveTo(x, y + 20); ctx.lineTo(x + TILE_SIZE, y + 20);
+                ctx.stroke();
+            } else if (tile === TILE.STONE_PATH || tile === TILE.PATH) {
+                // Caminho de Pedras do Portal
+                ctx.fillStyle = '#3b4261';
+                ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+                ctx.strokeStyle = '#282d44';
+                ctx.strokeRect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+            } else if (tile === TILE.TREE) {
+                // Árvore de Pinheiro
+                ctx.fillStyle = '#15803d';
+                ctx.beginPath();
+                ctx.moveTo(x + 20, y + 4);
+                ctx.lineTo(x + 6, y + 32);
+                ctx.lineTo(x + 34, y + 32);
+                ctx.closePath();
+                ctx.fill();
+                ctx.fillStyle = '#166534';
+                ctx.beginPath();
+                ctx.moveTo(x + 20, y + 12);
+                ctx.lineTo(x + 8, y + 34);
+                ctx.lineTo(x + 32, y + 34);
+                ctx.closePath();
+                ctx.fill();
+            } else if (tile === TILE.BUSH) {
+                // Arbusto Denso
+                ctx.fillStyle = '#16a34a';
+                ctx.beginPath();
+                ctx.arc(x + 14, y + 22, 12, 0, Math.PI * 2);
+                ctx.arc(x + 26, y + 22, 12, 0, Math.PI * 2);
+                ctx.arc(x + 20, y + 14, 12, 0, Math.PI * 2);
+                ctx.fill();
+            } else if (tile === TILE.SPIKES) {
+                // Terreno de Espinhos/Plantação
+                ctx.fillStyle = '#292524';
+                ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+                ctx.fillStyle = '#78716c';
+                for (let i = 0; i < 3; i++) {
+                    for (let j = 0; j < 3; j++) {
+                        ctx.beginPath();
+                        ctx.moveTo(x + 8 + i * 12, y + 14 + j * 10);
+                        ctx.lineTo(x + 4 + i * 12, y + 6 + j * 10);
+                        ctx.lineTo(x + 12 + i * 12, y + 6 + j * 10);
+                        ctx.fill();
+                    }
+                }
+            } else if (tile === TILE.GATE) {
+                // Portal/Arco de Pedra de Saída
+                ctx.fillStyle = '#475569';
+                ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+                ctx.fillStyle = '#020617';
+                ctx.beginPath();
+                ctx.arc(x + 20, y + 26, 14, Math.PI, 0, false);
+                ctx.fillRect(x + 6, y + 26, 28, 14);
+                ctx.fill();
+            }
+        }
+    }
+
+    // Desenhar Caixas Empurráveis
+    crates.forEach(crate => {
+        const cx = crate.x * TILE_SIZE;
+        const cy = crate.y * TILE_SIZE + HUD_HEIGHT;
+        ctx.fillStyle = '#a16207';
+        ctx.fillRect(cx + 3, cy + 3, TILE_SIZE - 6, TILE_SIZE - 6);
+        ctx.strokeStyle = '#713f12';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(cx + 3, cy + 3, TILE_SIZE - 6, TILE_SIZE - 6);
+        
+        // Cruz de madeira
+        ctx.beginPath();
+        ctx.moveTo(cx + 5, cy + 5); ctx.lineTo(cx + TILE_SIZE - 5, cy + TILE_SIZE - 5);
+        ctx.moveTo(cx + TILE_SIZE - 5, cy + 5); ctx.lineTo(cx + 5, cy + TILE_SIZE - 5);
+        ctx.stroke();
+    });
+}
+
+function drawShapeIcon(type, cx, cy, size, fillColor, strokeColor) {
+    ctx.fillStyle = fillColor;
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 3;
+
+    ctx.beginPath();
+    if (type === 'square') {
+        ctx.rect(cx - size / 2, cy - size / 2, size, size);
+    } else if (type === 'triangle') {
+        ctx.moveTo(cx, cy - size / 2 - 2);
+        ctx.lineTo(cx - size / 2 - 2, cy + size / 2);
+        ctx.lineTo(cx + size / 2 + 2, cy + size / 2);
+        ctx.closePath();
+    } else if (type === 'diamond') {
+        ctx.moveTo(cx, cy - size / 2 - 2);
+        ctx.lineTo(cx + size / 2 + 2, cy);
+        ctx.lineTo(cx, cy + size / 2 + 2);
+        ctx.lineTo(cx - size / 2 - 2, cy);
+        ctx.closePath();
+    } else if (type === 'circle') {
+        ctx.arc(cx, cy, size / 2 + 1, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    ctx.stroke();
+
+    // Perninhas Pixeladas Fofas!
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(cx - 6, cy + size / 2 + 1, 3, 4);
+    ctx.fillRect(cx + 3, cy + size / 2 + 1, 3, 4);
+}
+
+function drawHeroes() {
+    heroes.forEach(hero => {
+        if (hero.escaped) return;
+
+        const cx = hero.x * TILE_SIZE + TILE_SIZE / 2;
+        const cy = hero.y * TILE_SIZE + HUD_HEIGHT + TILE_SIZE / 2 - 2;
+
+        drawShapeIcon(hero.type, cx, cy, 22, hero.color, hero.border);
+
+        // Indicador Visual Overhead de Ativo
+        if (hero.active) {
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.moveTo(cx, hero.y * TILE_SIZE + HUD_HEIGHT - 2);
+            ctx.lineTo(cx - 5, hero.y * TILE_SIZE + HUD_HEIGHT - 8);
+            ctx.lineTo(cx + 5, hero.y * TILE_SIZE + HUD_HEIGHT - 8);
+            ctx.closePath();
+            ctx.fill();
+        }
+    });
+}
+
+// Loop Principal de Renderização
+function gameLoop() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawMap();
+    drawHeroes();
+    drawHUD();
+    requestAnimationFrame(gameLoop);
+}
+
+// Inicializar Jogo
+loadLevel(0);
+requestAnimationFrame(gameLoop);
+
+</script>
+</body>
+</html>
