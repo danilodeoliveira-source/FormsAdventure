@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Forms Adventure Max</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+
+        body {
+            background-color: #05070a;
+            color: #ffffff;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            border: 2px solid #00ffcc;
+            box-shadow: 0 0 20px rgba(0, 255, 204, 0.2);
+            background-color: #000;
+        }
+
+        canvas {
+            background-color: #0d0e15;
+            display: block;
+            image-rendering: pixelated;
+        }
+
+        .controls-bar {
+            width: 100%;
+            background-color: #080a0f;
+            border-top: 1px solid #1a233a;
+            padding: 8px 12px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #a0aec0;
+        }
+
+        .btn {
+            background-color: #121824;
+            border: 1px solid #00ffcc;
+            color: #00ffcc;
+            padding: 4px 10px;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: bold;
+            font-size: 11px;
+        }
+
+        .btn:hover {
+            background-color: #00ffcc;
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas" width="800" height="520"></canvas>
+    <div class="controls-bar">
+        <div>🎮 <b>Mover:</b> WASD / Setas | <b>Ataque:</b> ESPAÇO | <b>Formas:</b> 1, 2, 3, 4</div>
+        <div>
+            <button class="btn" onclick="toggleFullscreen()">Tela Cheia (F)</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+const HEADER_HEIGHT = 60;
+const TILE_SIZE = 40;
+const MAP_COLS = 20;
+const MAP_ROWS = 11.5;
+
+// Estado do Jogo
+const keys = {};
+let particles = [];
+
+// Jogador
+const player = {
+    x: 120,
+    y: 160,
+    radius: 11, // Caixa reduzida para deslizar nos corredores sem travar
+    activeChar: 1, // 1: Quad, 2: Tri, 3: Los, 4: Cir
+    speed: 3.8,
+    hp: 5,
+    maxHp: 5,
+    dirX: 0,
+    dirY: 1,
+    invulnerable: 0,
+    keysCount: 0
+};
+
+// Mapa de Teste (0: Chão, 1: Parede, 2: Caixa, 3: Arbusto)
+const map = [
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,1],
+    [1,0,0,0,0,0,1,0,3,3,3,0,2,2,0,1,0,0,0,1],
+    [1,0,0,0,0,0,0,0,3,3,3,0,2,2,0,0,0,0,0,1],
+    [1,1,1,0,1,1,1,1,1,0,1,1,1,1,1,1,0,1,1,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,1,1,0,1,1,1,1,1,0,1,1,1,1,1,1,0,1,1,1],
+    [1,0,0,0,0,0,0,0,3,3,3,0,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,0,3,3,3,0,0,0,0,0,0,0,0,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+];
+
+// Eventos de Teclado
+window.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    keys[k] = true;
+
+    if (k === '1') player.activeChar = 1;
+    if (k === '2') player.activeChar = 2;
+    if (k === '3') player.activeChar = 3;
+    if (k === '4') player.activeChar = 4;
+    if (k === 'f') toggleFullscreen();
+});
+
+window.addEventListener('keyup', e => {
+    keys[e.key.toLowerCase()] = false;
+});
+
+function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+        canvas.requestFullscreen().catch(err => alert(err.message));
+    } else {
+        document.exitFullscreen();
+    }
+}
+
+// Colisão Suave
+function checkCollision(nx, ny) {
+    const r = player.radius;
+    const points = [
+        { x: nx - r, y: ny - r },
+        { x: nx + r, y: ny - r },
+        { x: nx - r, y: ny + r },
+        { x: nx + r, y: ny + r }
+    ];
+
+    for (let p of points) {
+        const col = Math.floor(p.x / TILE_SIZE);
+        const row = Math.floor((p.y - HEADER_HEIGHT) / TILE_SIZE);
+
+        if (row < 0 || row >= map.length || col < 0 || col >= map[0].length) return true;
+
+        const tile = map[row][col];
+        if (tile === 1 || tile === 2) return true; // Parede ou Caixa colidem
+    }
+    return false;
+}
+
+// Atualização da Lógica do Jogador
+function updatePlayer() {
+    let dx = 0;
+    let dy = 0;
+
+    if (keys['arrowup'] || keys['w']) dy -= 1;
+    if (keys['arrowdown'] || keys['s']) dy += 1;
+    if (keys['arrowleft'] || keys['a']) dx -= 1;
+    if (keys['arrowright'] || keys['d']) dx += 1;
+
+    if (dx !== 0 || dy !== 0) {
+        player.dirX = dx;
+        player.dirY = dy;
+
+        // Normalização diagonal
+        if (dx !== 0 && dy !== 0) {
+            dx *= 0.7071;
+            dy *= 0.7071;
+        }
+
+        let stepX = dx * player.speed;
+        let stepY = dy * player.speed;
+
+        // Deslizamento eixos independentes
+        if (!checkCollision(player.x + stepX, player.y)) {
+            player.x += stepX;
+        }
+        if (!checkCollision(player.x, player.y + stepY)) {
+            player.y += stepY;
+        }
+    }
+
+    if (player.invulnerable > 0) player.invulnerable--;
+}
+
+// Desenho do Jogador (Estilo Pixel Art com Pernas Pretas)
+function drawPlayer() {
+    ctx.save();
+    ctx.translate(player.x, player.y);
+
+    if (player.invulnerable % 4 > 2) ctx.globalAlpha = 0.3;
+
+    const s = 13;
+
+    // Função para desenhar os pezinhos pretos na base
+    function drawFeet(offsetY = 12) {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(-8, offsetY, 5, 5);
+        ctx.fillRect(3, offsetY, 5, 5);
+    }
+
+    // 1. QUADRADO (Verde)
+    if (player.activeChar === 1) {
+        drawFeet(s);
+
+        ctx.fillStyle = '#16d338';
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 3;
+
+        ctx.beginPath();
+        ctx.rect(-s, -s, s * 2, s * 2);
+        ctx.fill();
+        ctx.stroke();
+    }
+    // 2. TRIÂNGULO (Amarelo)
+    else if (player.activeChar === 2) {
+        drawFeet(s - 1);
+
+        ctx.fillStyle = '#ffcf00';
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 3;
+
+        ctx.beginPath();
+        ctx.moveTo(0, -s - 2);
+        ctx.lineTo(s + 3, s - 1);
+        ctx.lineTo(-s - 3, s - 1);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+    }
+    // 3. LOSANGO (Vermelho)
+    else if (player.activeChar === 3) {
+        drawFeet(s - 1);
+
+        ctx.fillStyle = '#e62828';
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 3;
+
+        ctx.beginPath();
+        ctx.moveTo(0, -s - 3);
+        ctx.lineTo(s + 2, 0);
+        ctx.lineTo(0, s + 1);
+        ctx.lineTo(-s - 2, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+    }
+    // 4. CÍRCULO (Azul)
+    else if (player.activeChar === 4) {
+        drawFeet(s - 2);
+
+        ctx.fillStyle = '#1ea2f6';
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 3;
+
+        ctx.beginPath();
+        ctx.arc(0, -1, s, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+    }
+
+    ctx.restore();
+}
+
+// Desenho do HUD (Barra Superior com Seleção de Formas)
+function drawHUD() {
+    // Fundo da barra superior
+    ctx.fillStyle = '#05070a';
+    ctx.fillRect(0, 0, canvas.width, HEADER_HEIGHT);
+    ctx.strokeStyle = '#1a233a';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, HEADER_HEIGHT);
+    ctx.lineTo(canvas.width, HEADER_HEIGHT);
+    ctx.stroke();
+
+    // Caixas de Seleção das 4 Formas
+    const forms = [
+        { id: 1, color: '#16d338' },
+        { id: 2, color: '#ffcf00' },
+        { id: 3, color: '#e62828' },
+        { id: 4, color: '#1ea2f6' }
+    ];
+
+    const startX = 20;
+    const startY = 10;
+    const boxSize = 40;
+    const gap = 12;
+
+    forms.forEach((f, i) => {
+        const x = startX + i * (boxSize + gap);
+        const y = startY;
+
+        // Caixa externa
+        ctx.fillStyle = '#0a0d12';
+        ctx.fillRect(x, y, boxSize, boxSize);
+        ctx.strokeStyle = player.activeChar === f.id ? '#ffffff' : '#2a3140';
+        ctx.lineWidth = player.activeChar === f.id ? 2 : 1;
+        ctx.strokeRect(x, y, boxSize, boxSize);
+
+        // Atalho da tecla
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 11px monospace';
+        ctx.fillText(f.id, x + 4, y + 11);
+
+        // Ícone dentro do slot
+        const cx = x + boxSize / 2;
+        const cy = y + boxSize / 2 + 2;
+        const r = 9;
+
+        ctx.save();
+        ctx.translate(cx, cy);
+
+        // Pezinhos do ícone
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(-5, r - 2, 3, 3);
+        ctx.fillRect(2, r - 2, 3, 3);
+
+        ctx.fillStyle = f.color;
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 2;
+
+        if (f.id === 1) {
+            ctx.beginPath();
+            ctx.rect(-r, -r, r * 2, r * 2);
+            ctx.fill(); ctx.stroke();
+        } else if (f.id === 2) {
+            ctx.beginPath();
+            ctx.moveTo(0, -r - 1); ctx.lineTo(r + 1, r - 1); ctx.lineTo(-r - 1, r - 1);
+            ctx.closePath(); ctx.fill(); ctx.stroke();
+        } else if (f.id === 3) {
+            ctx.beginPath();
+            ctx.moveTo(0, -r - 1); ctx.lineTo(r, 0); ctx.lineTo(0, r - 1); ctx.lineTo(-r, 0);
+            ctx.closePath(); ctx.fill(); ctx.stroke();
+        } else if (f.id === 4) {
+            ctx.beginPath();
+            ctx.arc(0, -1, r, 0, Math.PI * 2);
+            ctx.fill(); ctx.stroke();
+        }
+
+        ctx.restore();
+    });
+
+    // Indicadores de Controles do Topo
+    ctx.fillStyle = '#7a8b9e';
+    ctx.font = '10px monospace';
+    ctx.fillText("UP", 255, 18);
+    ctx.fillText("LEFT DOWN RIGHT", 225, 34);
+    ctx.fillText(" +    +    +", 230, 44);
+
+    // Vidas e Chaves
+    ctx.fillStyle = '#ff0055';
+    ctx.font = '14px monospace';
+    ctx.fillText(`VIDA: ${'❤️'.repeat(player.hp)}`, 640, 26);
+    ctx.fillStyle = '#ffcc00';
+    ctx.fillText(`🔑 CHAVES: ${player.keysCount}`, 640, 46);
+}
+
+// Desenhar o Mapa
+function drawMap() {
+    for (let r = 0; r < map.length; r++) {
+        for (let c = 0; c < map[r].length; c++) {
+            const tile = map[r][c];
+            const x = c * TILE_SIZE;
+            const y = HEADER_HEIGHT + r * TILE_SIZE;
+
+            // Piso Padrão
+            ctx.fillStyle = (r + c) % 2 === 0 ? '#141824' : '#11141f';
+            ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+            ctx.strokeStyle = '#1b2234';
+            ctx.strokeRect(x, y, TILE_SIZE, TILE_SIZE);
+
+            // Parede de Pedra (1)
+            if (tile === 1) {
+                ctx.fillStyle = '#2b3040';
+                ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+                ctx.strokeStyle = '#151822';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+            }
+            // Caixa de Madeira (2)
+            else if (tile === 2) {
+                ctx.fillStyle = '#8b5a2b';
+                ctx.fillRect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+                ctx.strokeStyle = '#4a2e11';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+            }
+            // Arbusto (3)
+            else if (tile === 3) {
+                ctx.fillStyle = '#1e8234';
+                ctx.beginPath();
+                ctx.arc(x + 20, y + 20, 15, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+    }
+}
+
+// Loop Principal do Jogo
+function gameLoop() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    updatePlayer();
+
+    drawMap();
+    drawPlayer();
+    drawHUD();
+
+    requestAnimationFrame(gameLoop);
+}
+
+// Inicializar
+gameLoop();
+</script>
+</body>
+</html>
